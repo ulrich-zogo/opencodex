@@ -5,11 +5,13 @@
  * per-bucket detail view.
  */
 /* eslint-disable react-refresh/only-export-components -- bucket label helper co-locates with the rail rows */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { IconChevron, IconHardDrive } from "../../icons";
 import { useT, type TFn, type TKey, type Locale } from "../../i18n/shared";
-import { logGuardLabel } from "../../i18n/log-guard-labels";
+import { logGuardLabel, type LogGuardLabelKey } from "../../i18n/log-guard-labels";
 import { formatBytes } from "../../format-bytes";
+
+const API_BASE = import.meta.env.VITE_API_BASE || "";
 
 export interface StorageLargestEntry {
   path: string;
@@ -95,6 +97,17 @@ const BUCKET_TKEYS: Record<string, TKey> = {
   other: "storage.bucket.other",
 };
 
+const MUTATION_ERROR_KEYS = new Set([
+  "codex_running",
+  "process_enumeration_failed",
+  "busy",
+  "unsupported_schema",
+  "trigger_collision",
+  "unsafe_path",
+  "database_error",
+  "config_write_failed",
+]);
+
 export function bucketLabel(bucket: StorageBucket, t: TFn): string {
   const tkey = BUCKET_TKEYS[bucket.key];
   return tkey ? t(tkey) : bucket.label;
@@ -110,26 +123,33 @@ function rowsDisplay(bucket: StorageBucket, locale: Locale, t: TFn): string {
   return bucket.rows.toLocaleString(locale);
 }
 
+function mutationErrorLabel(locale: Locale, code: unknown): string {
+  if (typeof code === "string" && MUTATION_ERROR_KEYS.has(code)) {
+    return logGuardLabel(locale, `error.${code}` as LogGuardLabelKey);
+  }
+  return logGuardLabel(locale, "error.generic");
+}
+
 function CodexLogGuardPanel({
   report,
   locale,
   t,
   busy,
+  error,
   onAction,
 }: {
   report: CodexLogGuardReport;
   locale: Locale;
   t: TFn;
   busy: boolean;
-  onAction?: (action: CodexLogGuardAction) => void;
+  error: string | null;
+  onAction: (action: CodexLogGuardAction) => void;
 }) {
   const metrics = report.metrics;
   const inspectOnly = report.capabilities.protection.state === "unsupported"
     || report.capabilities.reclaim.state === "unsupported";
   const protection = report.protection;
-  const mutationDisabled = busy
-    || !onAction
-    || report.capabilities.protection.state !== "supported";
+  const mutationDisabled = busy || report.capabilities.protection.state !== "supported";
 
   return (
     <div className="stw-section" data-testid="codex-log-guard">
@@ -191,7 +211,7 @@ function CodexLogGuardPanel({
               data-testid="log-guard-protect-compat"
               disabled={mutationDisabled}
               aria-pressed={protection.desiredMode === "compat"}
-              onClick={() => onAction?.({ action: "protect", mode: "compat" })}
+              onClick={() => onAction({ action: "protect", mode: "compat" })}
             >
               {logGuardLabel(locale, "compat")}
             </button>
@@ -201,7 +221,7 @@ function CodexLogGuardPanel({
               data-testid="log-guard-protect-quiet"
               disabled={mutationDisabled}
               aria-pressed={protection.desiredMode === "quiet"}
-              onClick={() => onAction?.({ action: "protect", mode: "quiet" })}
+              onClick={() => onAction({ action: "protect", mode: "quiet" })}
             >
               {logGuardLabel(locale, "quiet")}
             </button>
@@ -210,7 +230,7 @@ function CodexLogGuardPanel({
               className="btn btn-ghost btn-sm"
               data-testid="log-guard-unprotect"
               disabled={mutationDisabled || protection.desiredMode === "off"}
-              onClick={() => onAction?.({ action: "unprotect" })}
+              onClick={() => onAction({ action: "unprotect" })}
             >
               {logGuardLabel(locale, "disable")}
             </button>
@@ -220,13 +240,14 @@ function CodexLogGuardPanel({
                 className="btn btn-sm"
                 data-testid="log-guard-repair"
                 disabled={mutationDisabled}
-                onClick={() => onAction?.({ action: "repair" })}
+                onClick={() => onAction({ action: "repair" })}
               >
                 {logGuardLabel(locale, "repair")}
               </button>
             )}
             {busy && <span className="muted" role="status">{logGuardLabel(locale, "applying")}</span>}
           </div>
+          {error && <p className="err" role="alert">{error}</p>}
         </div>
       )}
 
@@ -261,12 +282,22 @@ export default function StorageWorkspace({
 }: StorageWorkspaceProps) {
   const t = useT();
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [logGuardOverride, setLogGuardOverride] = useState<CodexLogGuardReport | null>(null);
+  const [internalLogGuardBusy, setInternalLogGuardBusy] = useState(false);
+  const [logGuardError, setLogGuardError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLogGuardOverride(null);
+    setLogGuardError(null);
+  }, [report.generatedAt]);
 
   const sortedBuckets = useMemo(
     () => report.buckets.toSorted((a, b) => b.bytes - a.bytes),
     [report.buckets],
   );
   const selected = sortedBuckets.find(b => b.key === selectedKey) ?? null;
+  const displayedLogGuard = logGuardOverride ?? report.codexLogs ?? null;
+  const effectiveLogGuardBusy = logGuardBusy || internalLogGuardBusy;
 
   const largestAcross = useMemo(() => {
     const rows: Array<StorageLargestEntry & { bucketKey: string }> = [];
@@ -280,6 +311,39 @@ export default function StorageWorkspace({
     () => new Map(report.buckets.map(b => [b.key, b])),
     [report.buckets],
   );
+
+  const runLogGuardAction = (action: CodexLogGuardAction) => {
+    if (onLogGuardAction) {
+      onLogGuardAction(action);
+      return;
+    }
+    if (internalLogGuardBusy) return;
+    void (async () => {
+      setInternalLogGuardBusy(true);
+      setLogGuardError(null);
+      try {
+        const suffix = action.action === "protect" ? "protect" : action.action;
+        const init: RequestInit = {
+          method: "POST",
+          ...(action.action === "protect" ? {
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ mode: action.mode }),
+          } : {}),
+        };
+        const response = await fetch(`${API_BASE}/api/storage/codex-logs/${suffix}`, init);
+        const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
+        if (!response.ok) {
+          setLogGuardError(mutationErrorLabel(locale, payload.error));
+          return;
+        }
+        setLogGuardOverride(payload as unknown as CodexLogGuardReport);
+      } catch {
+        setLogGuardError(logGuardLabel(locale, "error.generic"));
+      } finally {
+        setInternalLogGuardBusy(false);
+      }
+    })();
+  };
 
   return (
     <div className="storage-workspace-root">
@@ -377,13 +441,14 @@ export default function StorageWorkspace({
               </div>
             </div>
 
-            {report.codexLogs && (
+            {displayedLogGuard && (
               <CodexLogGuardPanel
-                report={report.codexLogs}
+                report={displayedLogGuard}
                 locale={locale}
                 t={t}
-                busy={logGuardBusy}
-                onAction={onLogGuardAction}
+                busy={effectiveLogGuardBusy}
+                error={logGuardError}
+                onAction={runLogGuardAction}
               />
             )}
 
