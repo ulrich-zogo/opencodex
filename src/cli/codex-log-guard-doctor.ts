@@ -32,6 +32,6 @@ export function formatCodexLogGuardDoctor(report: CodexLogGuardInspection): stri
     if (top) lines.push(`         top target ${top.target} (${top.rows} rows)`);
   }
 
-  lines.push("         checkpointed read-only snapshot; no SSD/NAND write-rate estimate");
+  lines.push("         checkpointed read-only snapshot; activity rate not measured");
   return lines;
 }
