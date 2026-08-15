@@ -9,7 +9,7 @@ permissions:
 jobs:
   contracts:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -34,3 +34,19 @@ jobs:
             tests/codex-log-guard-doctor-protection.test.ts
       - name: GUI protection contract
         run: cd gui && bun test --isolate tests/storage-log-guard-protection.test.tsx
+      - name: Print React Doctor diagnostics
+        shell: bash
+        run: |
+          set +e
+          printf '%s\n' \
+            'src/components/storage-workspace/StorageWorkspace.tsx' \
+            'tests/storage-log-guard-protection.test.tsx' \
+            > /tmp/log-guard-react-files.txt
+          cd gui
+          npm exec --yes --package react-doctor@0.9.11 -- react-doctor . \
+            --json --json-compact --scope files \
+            --changed-files-from /tmp/log-guard-react-files.txt \
+            > /tmp/react-doctor.json
+          status=$?
+          cat /tmp/react-doctor.json
+          exit "$status"
