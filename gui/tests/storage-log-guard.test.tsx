@@ -13,8 +13,6 @@ function report(): StorageReport {
     buckets: [],
     codexLogs: {
       generatedAt: 1,
-      sqliteHome: "/state/codex",
-      databasePath: "/state/codex/logs_2.sqlite",
       externalSqliteHome: true,
       snapshot: "checkpointed",
       files: { databaseBytes: 8192, walBytes: 2048, shmBytes: 0 },
@@ -60,6 +58,7 @@ test("Storage overview renders read-only Codex diagnostic log health", () => {
   expect(html).toContain("2 KB");
   expect(html).toContain("4 KB");
   expect(html).toContain("codex_api::sse");
+  expect(html).toContain("External SQLite storage");
   expect(html).toContain("snapshot=checkpointed");
   expect(html).not.toContain("/state/codex");
   expect(html).not.toContain("Protect");
