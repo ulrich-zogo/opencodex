@@ -58,11 +58,14 @@ export interface CodexLogGuardMetrics {
   estimatedLogBytes: number | null;
 }
 
+/**
+ * Serializable, privacy-safe Log Guard inspection result.
+ *
+ * Canonical filesystem paths are deliberately kept local to the inspector. Consumers get
+ * only the coarse location relation (`externalSqliteHome`) and aggregate file/SQLite data.
+ */
 export interface CodexLogGuardInspection {
   generatedAt: number;
-  codexHome: string;
-  sqliteHome: string;
-  databasePath: string;
   externalSqliteHome: boolean;
   snapshot: "checkpointed";
   files: {
@@ -186,9 +189,6 @@ export function inspectCodexLogs(deps: CodexSqliteHomeDeps = {}): CodexLogGuardI
 
   const common = {
     generatedAt: Date.now(),
-    codexHome,
-    sqliteHome,
-    databasePath,
     externalSqliteHome: resolve(sqliteHome) !== resolve(codexHome),
     snapshot: "checkpointed" as const,
     files,
