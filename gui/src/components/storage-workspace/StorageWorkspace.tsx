@@ -26,11 +26,48 @@ export interface StorageBucket {
   rows?: number | null;
 }
 
+type LogGuardReason = "database_missing" | "database_unreadable" | "unknown_schema";
+type LogGuardCapability = { state: "supported" } | { state: "unsupported"; reason: LogGuardReason };
+type LogGuardSchema =
+  | { state: "compatible" }
+  | { state: "missing"; reason: "database_missing" }
+  | { state: "unreadable"; reason: "database_unreadable" }
+  | { state: "unsupported"; reason: "unknown_schema" };
+
+export interface CodexLogGuardReport {
+  generatedAt: number;
+  sqliteHome: string;
+  databasePath: string;
+  externalSqliteHome: boolean;
+  snapshot: "checkpointed";
+  files: { databaseBytes: number; walBytes: number; shmBytes: number };
+  schema: LogGuardSchema;
+  capabilities: {
+    inspection: LogGuardCapability;
+    protection: LogGuardCapability;
+    reclaim: LogGuardCapability;
+  };
+  metrics: null | {
+    totalRows: number;
+    rowsByLevel: Record<string, number>;
+    traceRows: number;
+    traceShare: number;
+    topTargets: Array<{ target: string; rows: number }>;
+    pageSize: number;
+    pageCount: number;
+    freelistPages: number;
+    reclaimableBytes: number;
+    estimatedLogBytes: number | null;
+  };
+}
+
 export interface StorageReport {
   codexHome: string;
   generatedAt: number;
   total: { bytes: number; fileCount: number };
   buckets: StorageBucket[];
+  codexLogs?: CodexLogGuardReport | null;
+  codexLogsError?: string;
   error?: string;
 }
 
@@ -58,6 +95,80 @@ function rowsDisplay(bucket: StorageBucket, locale: Locale, t: TFn): string {
   if (bucket.rows === undefined) return "—";
   if (bucket.rows === null) return t("storage.rows.unknown");
   return bucket.rows.toLocaleString(locale);
+}
+
+function formatLogBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KiB`;
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MiB`;
+  return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
+}
+
+function logSchemaLabel(schema: LogGuardSchema): string {
+  if (schema.state === "compatible") return "Compatible";
+  if (schema.state === "unsupported") return "Unknown schema";
+  if (schema.state === "unreadable") return "Unreadable";
+  return "Not present";
+}
+
+function CodexLogGuardPanel({ report, locale }: { report: CodexLogGuardReport; locale: Locale }) {
+  const metrics = report.metrics;
+  const inspectOnly = report.capabilities.protection.state === "unsupported"
+    || report.capabilities.reclaim.state === "unsupported";
+
+  return (
+    <div className="stw-section" data-testid="codex-log-guard">
+      <h3 className="stw-section-title">Codex diagnostic logs</h3>
+      <dl className="stw-kv">
+        <div className="stw-kv-row">
+          <dt>Status</dt>
+          <dd>{logSchemaLabel(report.schema)}{inspectOnly && report.schema.state === "unsupported" ? " · Inspection only" : ""}</dd>
+        </div>
+        <div className="stw-kv-row">
+          <dt>Database</dt>
+          <dd className="stw-kv-mono">{formatLogBytes(report.files.databaseBytes)}</dd>
+        </div>
+        <div className="stw-kv-row">
+          <dt>WAL</dt>
+          <dd className="stw-kv-mono">{formatLogBytes(report.files.walBytes)}</dd>
+        </div>
+        {metrics && (
+          <>
+            <div className="stw-kv-row">
+              <dt>Rows</dt>
+              <dd className="stw-kv-mono">{metrics.totalRows.toLocaleString(locale)}</dd>
+            </div>
+            <div className="stw-kv-row">
+              <dt>TRACE share</dt>
+              <dd className="stw-kv-mono">{(metrics.traceShare * 100).toFixed(1)}%</dd>
+            </div>
+            <div className="stw-kv-row">
+              <dt>Reclaimable</dt>
+              <dd className="stw-kv-mono">{formatLogBytes(metrics.reclaimableBytes)}</dd>
+            </div>
+          </>
+        )}
+        <div className="stw-kv-row">
+          <dt>SQLite home</dt>
+          <dd className="stw-kv-mono" title={report.sqliteHome}>
+            {report.externalSqliteHome ? "external sqlite_home" : "CODEX_HOME"}
+          </dd>
+        </div>
+      </dl>
+      {metrics && metrics.topTargets.length > 0 && (
+        <div className="stw-section">
+          <h4 className="stw-section-title">Top log targets</h4>
+          {metrics.topTargets.slice(0, 5).map(target => (
+            <div key={target.target} className="stw-file-row">
+              <span className="stw-file-path" title={target.target}>{target.target}</span>
+              <span className="stw-file-size">{target.rows.toLocaleString(locale)} rows</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <p className="stw-hint">Read-only checkpointed snapshot. Live WAL contents can be newer than the row aggregates shown here.</p>
+    </div>
+  );
 }
 
 export interface StorageWorkspaceProps {
@@ -183,6 +294,8 @@ export default function StorageWorkspace({ report, locale }: StorageWorkspacePro
                 <div className="stw-summary-value mono stw-home-path" title={report.codexHome}>{report.codexHome}</div>
               </div>
             </div>
+
+            {report.codexLogs && <CodexLogGuardPanel report={report.codexLogs} locale={locale} />}
 
             {largestAcross.length > 0 ? (
               <div className="stw-section">
