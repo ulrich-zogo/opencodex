@@ -47,8 +47,8 @@ export function printCodexLogGuardDoctor(deps: CodexLogGuardDoctorDeps = {}): vo
   const log = deps.log ?? console.log;
   try {
     for (const line of formatCodexLogGuardDoctor(inspect())) log(line);
-  } catch (error) {
+  } catch {
     log("Codex diagnostic logs");
-    log(`  --     inspection unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    log("  --     inspection unavailable");
   }
 }
