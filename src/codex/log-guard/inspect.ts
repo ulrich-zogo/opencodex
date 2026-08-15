@@ -83,8 +83,15 @@ interface ColumnRow { name: string }
 interface CountRow { n: number }
 interface LevelRow { level: string; rows: number }
 interface TargetRow { target: string; rows: number }
-interface PragmaNumberRow { value: number }
 interface EstimatedBytesRow { bytes: number | null }
+
+function isFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
 
 function fileSize(path: string): number {
   try {
@@ -108,10 +115,8 @@ function sameColumns(columns: string[]): boolean {
 }
 
 function pragmaNumber(db: Database, pragma: "page_size" | "page_count" | "freelist_count"): number {
-  // SQLite names the single result column after the PRAGMA. Alias through a scalar SELECT
-  // so Bun sees one stable `value` property across supported SQLite versions.
-  const row = db.query<PragmaNumberRow, []>(`SELECT ${pragma} AS value FROM pragma_${pragma}`).get();
-  return Number(row?.value ?? 0);
+  const row = db.query<Record<string, number>, []>(`PRAGMA ${pragma}`).get();
+  return Number(row?.[pragma] ?? 0);
 }
 
 function readMetrics(db: Database, columns: string[]): CodexLogGuardMetrics | null {
@@ -172,6 +177,7 @@ export function inspectCodexLogs(deps: CodexSqliteHomeDeps = {}): CodexLogGuardI
   const resolutionDeps: CodexSqliteHomeDeps = { ...deps, codexHome };
   const sqliteHome = resolveCodexSqliteHome(resolutionDeps);
   const databasePath = resolveCodexLogsDbPath(resolutionDeps);
+  const databaseExists = isFile(databasePath);
   const files = {
     databaseBytes: fileSize(databasePath),
     walBytes: fileSize(`${databasePath}-wal`),
@@ -188,7 +194,7 @@ export function inspectCodexLogs(deps: CodexSqliteHomeDeps = {}): CodexLogGuardI
     files,
   };
 
-  if (files.databaseBytes === 0) {
+  if (!databaseExists) {
     const schema: CodexLogGuardSchemaState = { state: "missing", reason: "database_missing" };
     const mutation = capabilityFor(schema);
     return {
