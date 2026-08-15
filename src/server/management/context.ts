@@ -1,6 +1,7 @@
 import type { OcxConfig } from "../../types";
 import type { NativeProfileApiDeps } from "../../codex/native-profile-api";
 import type { CodexLogGuardProtectionDeps } from "../../codex/log-guard/protection";
+import type { CodexLogGuardMaintenanceDeps } from "../../codex/log-guard/maintenance";
 import type { StartupInstallAction } from "../startup-action-control";
 import type { ManagementPrincipal } from "../management-auth";
 import type { CatalogModel } from "../../codex/catalog";
@@ -61,8 +62,13 @@ export interface ManagementApiDeps {
    * or create lock/config state outside the fixture.
    */
   codexLogGuardProtectionDeps?: CodexLogGuardProtectionDeps;
+  /**
+   * Log Guard maintenance seam. Production reuses the same fail-closed process
+   * enumerator and L namespace as Protect; route tests keep all maintenance
+   * state inside their temporary Codex home.
+   */
+  codexLogGuardMaintenanceDeps?: CodexLogGuardMaintenanceDeps;
 }
-
 
 export interface ManagementContext {
   req: Request;
