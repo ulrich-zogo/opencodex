@@ -5,7 +5,7 @@
  * per-bucket detail view.
  */
 /* eslint-disable react-refresh/only-export-components -- bucket label helper co-locates with the rail rows */
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { IconChevron, IconHardDrive } from "../../icons";
 import { useT, type TFn, type TKey, type Locale } from "../../i18n/shared";
 import { logGuardLabel, type LogGuardLabelKey } from "../../i18n/log-guard-labels";
@@ -274,6 +274,16 @@ export interface StorageWorkspaceProps {
   onLogGuardAction?: (action: CodexLogGuardAction) => void;
 }
 
+type GenerationScopedLogGuardReport = {
+  generation: number;
+  report: CodexLogGuardReport;
+};
+
+type GenerationScopedError = {
+  generation: number;
+  message: string;
+};
+
 export default function StorageWorkspace({
   report,
   locale,
@@ -282,21 +292,21 @@ export default function StorageWorkspace({
 }: StorageWorkspaceProps) {
   const t = useT();
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [logGuardOverride, setLogGuardOverride] = useState<CodexLogGuardReport | null>(null);
+  const [logGuardOverride, setLogGuardOverride] = useState<GenerationScopedLogGuardReport | null>(null);
   const [internalLogGuardBusy, setInternalLogGuardBusy] = useState(false);
-  const [logGuardError, setLogGuardError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setLogGuardOverride(null);
-    setLogGuardError(null);
-  }, [report.generatedAt]);
+  const [logGuardError, setLogGuardError] = useState<GenerationScopedError | null>(null);
 
   const sortedBuckets = useMemo(
     () => report.buckets.toSorted((a, b) => b.bytes - a.bytes),
     [report.buckets],
   );
   const selected = sortedBuckets.find(b => b.key === selectedKey) ?? null;
-  const displayedLogGuard = logGuardOverride ?? report.codexLogs ?? null;
+  const displayedLogGuard = logGuardOverride?.generation === report.generatedAt
+    ? logGuardOverride.report
+    : report.codexLogs ?? null;
+  const displayedLogGuardError = logGuardError?.generation === report.generatedAt
+    ? logGuardError.message
+    : null;
   const effectiveLogGuardBusy = logGuardBusy || internalLogGuardBusy;
 
   const largestAcross = useMemo(() => {
@@ -318,6 +328,7 @@ export default function StorageWorkspace({
       return;
     }
     if (internalLogGuardBusy) return;
+    const generation = report.generatedAt;
     void (async () => {
       setInternalLogGuardBusy(true);
       setLogGuardError(null);
@@ -333,12 +344,12 @@ export default function StorageWorkspace({
         const response = await fetch(`${API_BASE}/api/storage/codex-logs/${suffix}`, init);
         const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
         if (!response.ok) {
-          setLogGuardError(mutationErrorLabel(locale, payload.error));
+          setLogGuardError({ generation, message: mutationErrorLabel(locale, payload.error) });
           return;
         }
-        setLogGuardOverride(payload as unknown as CodexLogGuardReport);
+        setLogGuardOverride({ generation, report: payload as unknown as CodexLogGuardReport });
       } catch {
-        setLogGuardError(logGuardLabel(locale, "error.generic"));
+        setLogGuardError({ generation, message: logGuardLabel(locale, "error.generic") });
       } finally {
         setInternalLogGuardBusy(false);
       }
@@ -447,7 +458,7 @@ export default function StorageWorkspace({
                 locale={locale}
                 t={t}
                 busy={effectiveLogGuardBusy}
-                error={logGuardError}
+                error={displayedLogGuardError}
                 onAction={runLogGuardAction}
               />
             )}
