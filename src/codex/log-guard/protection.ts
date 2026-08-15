@@ -1,0 +1,364 @@
+import { lstatSync, realpathSync } from "node:fs";
+import { Database, constants as sqliteConstants } from "bun:sqlite";
+
+import { getCodexHome, resolveCodexLogsDbPath } from "../paths";
+import { samePathIdentity } from "../user-identity";
+import { inspectCodexLogs, type CodexLogGuardInspection } from "./inspect";
+import { withCodexLogGuardLock, type CodexLogGuardLockOutcome } from "./lock";
+import {
+  readCodexLogGuardMode,
+  writeCodexLogGuardMode,
+  type CodexLogGuardMode,
+} from "./policy";
+import {
+  listRunningCodexProcesses,
+  type CodexWriterProcessCheck,
+} from "./processes";
+
+export { type CodexLogGuardMode } from "./policy";
+
+const COMPAT_TRIGGER = "opencodex_log_guard_compat_v1";
+const QUIET_TRIGGER = "opencodex_log_guard_quiet_v1";
+const OWNED_TRIGGER_NAMES = [COMPAT_TRIGGER, QUIET_TRIGGER] as const;
+
+const CURRENT_LOG_COLUMNS = [
+  "id",
+  "ts",
+  "ts_nanos",
+  "level",
+  "target",
+  "feedback_log_body",
+  "module_path",
+  "file",
+  "line",
+  "thread_id",
+  "process_uuid",
+  "estimated_bytes",
+] as const;
+
+/**
+ * Versioned compatibility policy pinned to the current upstream Codex persistent
+ * log filters researched for Log Guard v1. It intentionally preserves unrelated
+ * TRACE rows rather than assuming all TRACE diagnostics are disposable.
+ */
+const COMPAT_TRIGGER_SQL = `CREATE TRIGGER ${COMPAT_TRIGGER}
+BEFORE INSERT ON logs
+WHEN
+  NEW.target = 'log'
+  OR NEW.target = 'codex_otel.log_only'
+  OR NEW.target = 'codex_otel.trace_safe'
+  OR NEW.target = 'codex_api::responses_websocket_timing'
+  OR NEW.target = 'codex_core::post_sampling_token_estimate'
+  OR (NEW.target = 'hyper_util' AND upper(NEW.level) IN ('TRACE', 'DEBUG', 'INFO'))
+  OR (NEW.target IN ('codex_rmcp_client', 'rmcp') AND upper(NEW.level) IN ('TRACE', 'DEBUG'))
+  OR (NEW.target IN (
+    'codex_http_client::transport',
+    'codex_api::sse',
+    'codex_tui::streaming::controller',
+    'codex_tui::streaming::table_holdback'
+  ) AND upper(NEW.level) = 'TRACE')
+  OR (NEW.target LIKE 'opentelemetry_sdk%' AND upper(NEW.level) IN ('TRACE', 'DEBUG'))
+BEGIN
+  SELECT RAISE(IGNORE);
+END`;
+
+const QUIET_TRIGGER_SQL = `CREATE TRIGGER ${QUIET_TRIGGER}
+BEFORE INSERT ON logs
+WHEN upper(NEW.level) = 'TRACE'
+BEGIN
+  SELECT RAISE(IGNORE);
+END`;
+
+const SQL_BY_MODE: Record<Exclude<CodexLogGuardMode, "off">, string> = {
+  compat: COMPAT_TRIGGER_SQL,
+  quiet: QUIET_TRIGGER_SQL,
+};
+
+const NAME_BY_MODE: Record<Exclude<CodexLogGuardMode, "off">, string> = {
+  compat: COMPAT_TRIGGER,
+  quiet: QUIET_TRIGGER,
+};
+
+export type CodexLogGuardObservedMode = CodexLogGuardMode | "collision";
+export type CodexLogGuardProtectionState = "off" | "active" | "drifted" | "unsupported" | "unknown";
+
+export interface CodexLogGuardProtectionSummary {
+  desiredMode: CodexLogGuardMode;
+  observedMode: CodexLogGuardObservedMode;
+  state: CodexLogGuardProtectionState;
+}
+
+export type CodexLogGuardStatus = CodexLogGuardInspection & {
+  protection: CodexLogGuardProtectionSummary;
+};
+
+export type CodexLogGuardMutationError =
+  | "unsupported_schema"
+  | "codex_running"
+  | "process_enumeration_failed"
+  | "trigger_collision"
+  | "unsafe_path"
+  | "busy"
+  | "database_error"
+  | "config_write_failed";
+
+export type CodexLogGuardMutationResult =
+  | { ok: true; status: CodexLogGuardStatus }
+  | { ok: false; error: CodexLogGuardMutationError };
+
+export interface CodexLogGuardProtectionDeps {
+  codexHome?: string;
+  processCheck?: () => CodexWriterProcessCheck;
+  readDesiredMode?: () => CodexLogGuardMode;
+  writeDesiredMode?: (mode: CodexLogGuardMode) => void;
+  withLock?: <T>(
+    canonicalCodexHome: string,
+    canonicalLogsDbPath: string,
+    work: () => T,
+  ) => CodexLogGuardLockOutcome<T>;
+}
+
+interface TriggerRow {
+  name: string;
+  sql: string | null;
+}
+interface ColumnRow { name: string }
+
+function normalizeSql(sql: string | null | undefined): string {
+  return (sql ?? "").trim().replace(/;\s*$/, "").replace(/\s+/g, " ");
+}
+
+function expectedSql(mode: Exclude<CodexLogGuardMode, "off">): string {
+  return normalizeSql(SQL_BY_MODE[mode]);
+}
+
+function ownedModeForRow(row: TriggerRow): Exclude<CodexLogGuardMode, "off"> | null {
+  if (row.name === COMPAT_TRIGGER && normalizeSql(row.sql) === expectedSql("compat")) return "compat";
+  if (row.name === QUIET_TRIGGER && normalizeSql(row.sql) === expectedSql("quiet")) return "quiet";
+  return null;
+}
+
+function queryReservedTriggers(db: Database): TriggerRow[] {
+  const placeholders = OWNED_TRIGGER_NAMES.map(() => "?").join(", ");
+  return db.query<TriggerRow, string[]>(
+    `SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND name IN (${placeholders}) ORDER BY name`,
+  ).all(...OWNED_TRIGGER_NAMES);
+}
+
+function observeTriggers(db: Database): CodexLogGuardObservedMode {
+  const rows = queryReservedTriggers(db);
+  if (rows.length === 0) return "off";
+  const modes = rows.map(ownedModeForRow);
+  if (modes.some(mode => mode === null)) return "collision";
+  const unique = new Set(modes);
+  return unique.size === 1 && rows.length === 1 ? modes[0]! : "collision";
+}
+
+function exactCurrentSchema(db: Database): boolean {
+  const columns = db.query<ColumnRow, []>("PRAGMA table_info(logs)").all().map(row => row.name).sort();
+  const expected = [...CURRENT_LOG_COLUMNS].sort();
+  return columns.length === expected.length && columns.every((value, index) => value === expected[index]);
+}
+
+function openReadOnly(databasePath: string): Database {
+  return new Database(databasePath, sqliteConstants.SQLITE_OPEN_READONLY);
+}
+
+function openReadWrite(databasePath: string): Database {
+  // READWRITE without CREATE: a missing/moved canonical DB is a refusal, not a
+  // reason for OpenCodex to materialise a new foreign database.
+  return new Database(databasePath, sqliteConstants.SQLITE_OPEN_READWRITE);
+}
+
+function databasePathIsSafe(databasePath: string): boolean {
+  try {
+    const stat = lstatSync(databasePath);
+    if (!stat.isFile() || stat.isSymbolicLink()) return false;
+    return samePathIdentity(realpathSync.native(databasePath), databasePath);
+  } catch {
+    return false;
+  }
+}
+
+function protectionSummary(
+  inspection: CodexLogGuardInspection,
+  desiredMode: CodexLogGuardMode,
+  observedMode: CodexLogGuardObservedMode,
+): CodexLogGuardProtectionSummary {
+  if (inspection.capabilities.protection.state !== "supported") {
+    return { desiredMode, observedMode, state: "unsupported" };
+  }
+  if (observedMode === "collision") return { desiredMode, observedMode, state: "unknown" };
+  if (desiredMode === "off" && observedMode === "off") {
+    return { desiredMode, observedMode, state: "off" };
+  }
+  if (desiredMode !== "off" && desiredMode === observedMode) {
+    return { desiredMode, observedMode, state: "active" };
+  }
+  return { desiredMode, observedMode, state: "drifted" };
+}
+
+function inspectionDeps(deps: CodexLogGuardProtectionDeps): { codexHome?: string } {
+  return deps.codexHome ? { codexHome: deps.codexHome } : {};
+}
+
+export function getCodexLogGuardProtectionStatus(
+  deps: CodexLogGuardProtectionDeps = {},
+): CodexLogGuardStatus {
+  const inspection = inspectCodexLogs(inspectionDeps(deps));
+  const desiredMode = (deps.readDesiredMode ?? readCodexLogGuardMode)();
+  let observedMode: CodexLogGuardObservedMode = "off";
+
+  if (inspection.schema.state === "compatible" && databasePathIsSafe(inspection.databasePath)) {
+    try {
+      const db = openReadOnly(inspection.databasePath);
+      try { observedMode = observeTriggers(db); }
+      finally { db.close(); }
+    } catch {
+      observedMode = "collision";
+    }
+  }
+
+  return {
+    ...inspection,
+    protection: protectionSummary(inspection, desiredMode, observedMode),
+  };
+}
+
+function processRefusal(check: CodexWriterProcessCheck): CodexLogGuardMutationError | null {
+  if (check.state === "unknown") return "process_enumeration_failed";
+  if (check.processes.length > 0) return "codex_running";
+  return null;
+}
+
+function isBusy(error: unknown): boolean {
+  const code = error && typeof error === "object" && "code" in error
+    ? String((error as { code?: unknown }).code)
+    : "";
+  const message = error instanceof Error ? error.message : String(error);
+  return code === "SQLITE_BUSY" || code === "SQLITE_LOCKED"
+    || /database (?:is|table is) locked/i.test(message);
+}
+
+function mutateOwnedTrigger(
+  databasePath: string,
+  mode: CodexLogGuardMode,
+): { ok: true; previousMode: CodexLogGuardMode } | { ok: false; error: CodexLogGuardMutationError } {
+  let db: Database | undefined;
+  let transactionOpen = false;
+  try {
+    if (!databasePathIsSafe(databasePath)) return { ok: false, error: "unsafe_path" };
+    db = openReadWrite(databasePath);
+    db.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+    transactionOpen = true;
+    if (!exactCurrentSchema(db)) {
+      db.exec("ROLLBACK");
+      transactionOpen = false;
+      return { ok: false, error: "unsupported_schema" };
+    }
+
+    const rows = queryReservedTriggers(db);
+    const modes = rows.map(ownedModeForRow);
+    if (modes.some(item => item === null) || rows.length > 1) {
+      db.exec("ROLLBACK");
+      transactionOpen = false;
+      return { ok: false, error: "trigger_collision" };
+    }
+    const previousMode: CodexLogGuardMode = rows.length === 1 ? modes[0]! : "off";
+
+    for (const row of rows) {
+      // Name is from our fixed allow-list; never interpolate arbitrary sqlite_master data.
+      db.exec(`DROP TRIGGER ${row.name}`);
+    }
+    if (mode !== "off") db.exec(SQL_BY_MODE[mode]);
+
+    const observed = observeTriggers(db);
+    if (observed !== mode) throw new Error("log_guard_trigger_verification_failed");
+    db.exec("COMMIT");
+    transactionOpen = false;
+    return { ok: true, previousMode };
+  } catch (error) {
+    if (transactionOpen) {
+      try { db?.exec("ROLLBACK"); } catch { /* close releases the transaction */ }
+    }
+    if (isBusy(error)) return { ok: false, error: "busy" };
+    return { ok: false, error: "database_error" };
+  } finally {
+    try { db?.close(); } catch { /* mutation already settled */ }
+  }
+}
+
+function restoreOwnedTrigger(databasePath: string, mode: CodexLogGuardMode): void {
+  // Best-effort compensation only. Failure is deliberately not hidden by
+  // claiming success; the caller returns config_write_failed and status will
+  // expose any remaining drift on the next read.
+  mutateOwnedTrigger(databasePath, mode);
+}
+
+function performMutation(
+  requestedMode: CodexLogGuardMode,
+  deps: CodexLogGuardProtectionDeps,
+): CodexLogGuardMutationResult {
+  const codexHome = deps.codexHome ?? getCodexHome();
+  const inspection = inspectCodexLogs({ codexHome });
+  if (inspection.capabilities.protection.state !== "supported") {
+    return { ok: false, error: "unsupported_schema" };
+  }
+  if (!databasePathIsSafe(inspection.databasePath)) return { ok: false, error: "unsafe_path" };
+
+  const checkProcesses = deps.processCheck ?? listRunningCodexProcesses;
+  const firstRefusal = processRefusal(checkProcesses());
+  if (firstRefusal) return { ok: false, error: firstRefusal };
+
+  const withLock = deps.withLock ?? withCodexLogGuardLock;
+  let locked: CodexLogGuardLockOutcome<ReturnType<typeof mutateOwnedTrigger>>;
+  try {
+    locked = withLock(codexHome, inspection.databasePath, () => {
+      const secondRefusal = processRefusal(checkProcesses());
+      if (secondRefusal) return { ok: false as const, error: secondRefusal };
+      return mutateOwnedTrigger(inspection.databasePath, requestedMode);
+    });
+  } catch {
+    return { ok: false, error: "database_error" };
+  }
+  if (locked.kind === "unavailable") {
+    return {
+      ok: false,
+      error: locked.reason === "busy"
+        ? "busy"
+        : locked.reason === "unsafe-path" ? "unsafe_path" : "database_error",
+    };
+  }
+  const mutation = locked.value;
+  if (!mutation.ok) return mutation;
+
+  const writeDesired = deps.writeDesiredMode ?? writeCodexLogGuardMode;
+  try {
+    writeDesired(requestedMode);
+  } catch {
+    restoreOwnedTrigger(inspection.databasePath, mutation.previousMode);
+    return { ok: false, error: "config_write_failed" };
+  }
+
+  return { ok: true, status: getCodexLogGuardProtectionStatus(deps) };
+}
+
+export function protectCodexLogs(
+  mode: Exclude<CodexLogGuardMode, "off">,
+  deps: CodexLogGuardProtectionDeps = {},
+): CodexLogGuardMutationResult {
+  return performMutation(mode, deps);
+}
+
+export function unprotectCodexLogs(
+  deps: CodexLogGuardProtectionDeps = {},
+): CodexLogGuardMutationResult {
+  return performMutation("off", deps);
+}
+
+export function repairCodexLogGuardProtection(
+  deps: CodexLogGuardProtectionDeps = {},
+): CodexLogGuardMutationResult {
+  const desired = (deps.readDesiredMode ?? readCodexLogGuardMode)();
+  return performMutation(desired, deps);
+}
