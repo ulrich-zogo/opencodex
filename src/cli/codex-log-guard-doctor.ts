@@ -76,11 +76,15 @@ export function printCodexLogGuardDoctor(deps: CodexLogGuardDoctorDeps = {}): vo
   try {
     for (const line of formatCodexLogGuardDoctor(inspect())) log(line);
   } catch (error) {
-    // Preserve the PR 1 fallback if protection-state lookup itself is unavailable.
-    try {
-      for (const line of formatCodexLogGuardDoctor(inspectCodexLogs())) log(line);
-      return;
-    } catch { /* report the original failure below */ }
+    // Production can still fall back to PR 1's simpler inspector if the enriched
+    // protection lookup fails. An injected inspector is a test/caller boundary:
+    // never escape that boundary and touch the real Codex home behind its back.
+    if (!deps.inspect) {
+      try {
+        for (const line of formatCodexLogGuardDoctor(inspectCodexLogs())) log(line);
+        return;
+      } catch { /* report the original failure below */ }
+    }
     log("Codex diagnostic logs");
     log(`  --     inspection unavailable: ${error instanceof Error ? error.message : String(error)}`);
   }
