@@ -8,6 +8,7 @@
 import { useMemo, useState } from "react";
 import { IconChevron, IconHardDrive } from "../../icons";
 import { useT, type TFn, type TKey, type Locale } from "../../i18n/shared";
+import { logGuardLabel } from "../../i18n/log-guard-labels";
 import { formatBytes } from "../../format-bytes";
 
 export interface StorageLargestEntry {
@@ -36,8 +37,6 @@ type LogGuardSchema =
 
 export interface CodexLogGuardReport {
   generatedAt: number;
-  sqliteHome: string;
-  databasePath: string;
   externalSqliteHome: boolean;
   snapshot: "checkpointed";
   files: { databaseBytes: number; walBytes: number; shmBytes: number };
@@ -110,7 +109,7 @@ function CodexLogGuardPanel({ report, locale, t }: { report: CodexLogGuardReport
           <dt>{t("dash.status")}</dt>
           <dd className="stw-kv-mono">
             <code>{report.schema.state}</code>
-            {inspectOnly && report.schema.state === "unsupported" ? <><span aria-hidden="true"> · </span><code>inspection-only</code></> : null}
+            {inspectOnly && report.schema.state === "unsupported" ? <><span aria-hidden="true"> · </span><code>{logGuardLabel(locale, "inspectionOnly")}</code></> : null}
           </dd>
         </div>
         <div className="stw-kv-row">
@@ -139,8 +138,8 @@ function CodexLogGuardPanel({ report, locale, t }: { report: CodexLogGuardReport
         )}
         <div className="stw-kv-row">
           <dt><code>sqlite_home</code></dt>
-          <dd className="stw-kv-mono" title={report.sqliteHome}>
-            <code>{report.externalSqliteHome ? "external sqlite_home" : "CODEX_HOME"}</code>
+          <dd className="stw-kv-mono">
+            <code>{report.externalSqliteHome ? logGuardLabel(locale, "externalSqliteHome") : "CODEX_HOME"}</code>
           </dd>
         </div>
       </dl>
