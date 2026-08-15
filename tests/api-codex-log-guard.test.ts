@@ -1,0 +1,80 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { handleManagementAPI } from "../src/server/management-api";
+import type { OcxConfig } from "../src/types";
+import { ManagementRequest } from "./helpers/management-auth";
+
+const roots: string[] = [];
+const originalCodexHome = process.env.CODEX_HOME;
+
+function makeLogsDb(path: string): void {
+  const db = new Database(path);
+  db.exec("PRAGMA journal_mode=WAL");
+  db.exec(`
+    CREATE TABLE logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts INTEGER NOT NULL,
+      ts_nanos INTEGER NOT NULL,
+      level TEXT NOT NULL,
+      target TEXT NOT NULL,
+      feedback_log_body TEXT,
+      module_path TEXT,
+      file TEXT,
+      line INTEGER,
+      thread_id TEXT,
+      process_uuid TEXT,
+      estimated_bytes INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX idx_logs_ts ON logs(ts DESC, ts_nanos DESC, id DESC);
+    CREATE INDEX idx_logs_thread_id ON logs(thread_id);
+    CREATE INDEX idx_logs_thread_id_ts ON logs(thread_id, ts DESC, ts_nanos DESC, id DESC);
+    CREATE INDEX idx_logs_process_uuid_threadless_ts
+      ON logs(process_uuid, ts DESC, ts_nanos DESC, id DESC)
+      WHERE thread_id IS NULL;
+    INSERT INTO logs (ts, ts_nanos, level, target, feedback_log_body, estimated_bytes)
+      VALUES (1, 0, 'TRACE', 'codex_api::sse', 'PRIVATE API BODY', 100);
+  `);
+  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  db.close();
+  for (const suffix of ["-wal", "-shm"]) {
+    try { unlinkSync(`${path}${suffix}`); } catch {}
+  }
+}
+
+function config(): OcxConfig {
+  return { port: 0, defaultProvider: "openai", providers: {} } as OcxConfig;
+}
+
+afterEach(() => {
+  if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+  else process.env.CODEX_HOME = originalCodexHome;
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+describe("Codex Log Guard management API", () => {
+  test("GET /api/storage/codex-logs returns privacy-safe read-only diagnostics", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-log-guard-api-"));
+    roots.push(root);
+    const codexHome = join(root, "codex-home");
+    const sqliteHome = join(root, "sqlite-home");
+    mkdirSync(codexHome);
+    mkdirSync(sqliteHome);
+    writeFileSync(join(codexHome, "config.toml"), `sqlite_home = ${JSON.stringify(sqliteHome)}\n`);
+    makeLogsDb(join(sqliteHome, "logs_2.sqlite"));
+    process.env.CODEX_HOME = codexHome;
+
+    const req = new ManagementRequest("http://localhost/api/storage/codex-logs", { method: "GET" });
+    const response = await handleManagementAPI(req, new URL(req.url), config(), { refreshCodexCatalog: async () => {} });
+
+    expect(response).not.toBeNull();
+    expect(response!.status).toBe(200);
+    const body = await response!.json() as Record<string, unknown>;
+    expect(body.databasePath).toBe(join(sqliteHome, "logs_2.sqlite"));
+    expect(body.externalSqliteHome).toBe(true);
+    expect(JSON.stringify(body)).not.toContain("PRIVATE API BODY");
+  });
+});
