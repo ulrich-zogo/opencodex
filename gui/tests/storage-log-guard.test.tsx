@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import StorageWorkspace, { type StorageReport } from "../src/components/storage-workspace/StorageWorkspace";
 import { LanguageProvider } from "../src/i18n/provider";
+import { DICTS, I18nContext, interpolate, type TFn } from "../src/i18n/shared";
 
 function report(): StorageReport {
   return {
@@ -39,6 +40,10 @@ function report(): StorageReport {
   };
 }
 
+function germanT(): TFn {
+  return (key, vars) => interpolate(DICTS.de[key] ?? DICTS.en[key] ?? key, vars);
+}
+
 test("Storage overview renders read-only Codex diagnostic log health", () => {
   const html = renderToStaticMarkup(
     <LanguageProvider>
@@ -55,14 +60,14 @@ test("Storage overview renders read-only Codex diagnostic log health", () => {
   expect(html).toContain("2 KB");
   expect(html).toContain("4 KB");
   expect(html).toContain("codex_api::sse");
-  expect(html).toContain("external sqlite_home");
   expect(html).toContain("snapshot=checkpointed");
+  expect(html).not.toContain("/state/codex");
   expect(html).not.toContain("Protect");
   expect(html).not.toContain("Compact");
   expect(html).not.toContain("High write activity");
 });
 
-test("Storage overview makes unknown schemas visibly inspect-only", () => {
+test("Storage overview localizes external and inspect-only labels", () => {
   const value = report();
   value.codexLogs = {
     ...value.codexLogs!,
@@ -75,11 +80,15 @@ test("Storage overview makes unknown schemas visibly inspect-only", () => {
   };
 
   const html = renderToStaticMarkup(
-    <LanguageProvider>
-      <StorageWorkspace report={value} locale="en" />
-    </LanguageProvider>,
+    <I18nContext.Provider value={{ locale: "de", setLocale: () => {}, t: germanT() }}>
+      <StorageWorkspace report={value} locale="de" />
+    </I18nContext.Provider>,
   );
 
   expect(html).toContain("unsupported");
-  expect(html).toContain("inspection-only");
+  expect(html).toContain("Nur Inspektion");
+  expect(html).toContain("Externer SQLite-Speicher");
+  expect(html).not.toContain("inspection-only");
+  expect(html).not.toContain("external sqlite_home");
+  expect(html).not.toContain("/state/codex");
 });
