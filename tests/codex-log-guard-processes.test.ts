@@ -1,44 +1,45 @@
 import { describe, expect, test } from "bun:test";
 
-async function loadModule() {
-  return import("../src/codex/log-guard/processes").catch(() => null);
-}
+import {
+  isCodexWriterCommandLine,
+  listRunningCodexProcesses,
+} from "../src/codex/log-guard/processes";
 
 describe("Codex Log Guard process gate", () => {
-  test("matches official Codex writer command lines without broad codex substring matching", async () => {
-    const mod = await loadModule();
-    expect(mod).not.toBeNull();
-    if (!mod) return;
-
-    expect(mod.isCodexWriterCommandLine("codex")).toBe(true);
-    expect(mod.isCodexWriterCommandLine("/usr/local/bin/codex exec --json")).toBe(true);
-    expect(mod.isCodexWriterCommandLine("codex --model gpt-5 app-server")).toBe(true);
-    expect(mod.isCodexWriterCommandLine("/opt/codex-x86_64-unknown-linux-musl exec")).toBe(true);
-    expect(mod.isCodexWriterCommandLine("codex-code-mode-host")).toBe(true);
-    expect(mod.isCodexWriterCommandLine("node /opt/codex-code-mode-host")).toBe(true);
-    expect(mod.isCodexWriterCommandLine("node worker.js codex exec")).toBe(false);
-    expect(mod.isCodexWriterCommandLine("node worker.js codex-code-mode-host")).toBe(false);
-    expect(mod.isCodexWriterCommandLine("bun /repo/opencodex/src/cli/index.ts storage codex-logs protect")).toBe(false);
-    expect(mod.isCodexWriterCommandLine("hermes-codex-bridge-mcp")).toBe(false);
+  test("matches official Codex writer command lines without broad codex substring matching", () => {
+    expect(isCodexWriterCommandLine("codex")).toBe(true);
+    expect(isCodexWriterCommandLine("/usr/local/bin/codex exec --json")).toBe(true);
+    expect(isCodexWriterCommandLine("codex --model gpt-5 app-server")).toBe(true);
+    expect(isCodexWriterCommandLine("/opt/codex-x86_64-unknown-linux-musl exec")).toBe(true);
+    expect(isCodexWriterCommandLine("codex-code-mode-host")).toBe(true);
+    expect(isCodexWriterCommandLine("node /opt/codex-code-mode-host")).toBe(true);
+    expect(isCodexWriterCommandLine("/Users/me/My Tools/codex exec --json")).toBe(true);
+    expect(isCodexWriterCommandLine("node /Users/me/My Tools/codex-code-mode-host")).toBe(true);
+    expect(isCodexWriterCommandLine("node worker.js codex exec")).toBe(false);
+    expect(isCodexWriterCommandLine("node worker.js codex-code-mode-host")).toBe(false);
+    expect(isCodexWriterCommandLine("bun /repo/opencodex/src/cli/index.ts storage codex-logs protect")).toBe(false);
+    expect(isCodexWriterCommandLine("hermes-codex-bridge-mcp")).toBe(false);
   });
 
-  test("fails closed when enumeration throws", async () => {
-    const mod = await loadModule();
-    expect(mod).not.toBeNull();
-    if (!mod) return;
-
-    expect(mod.listRunningCodexProcesses({
+  test("fails closed when enumeration throws", () => {
+    expect(listRunningCodexProcesses({
       platform: "linux",
       listSnapshots: () => { throw new Error("procfs unavailable"); },
     })).toEqual({ state: "unknown", reason: "enumeration_failed" });
   });
 
-  test("deduplicates matching current-user writer processes", async () => {
-    const mod = await loadModule();
-    expect(mod).not.toBeNull();
-    if (!mod) return;
+  test("reports PID 1 when it is an official Codex writer", () => {
+    expect(listRunningCodexProcesses({
+      platform: "linux",
+      listSnapshots: () => [{ pid: 1, commandLine: "codex exec --json" }],
+    })).toEqual({
+      state: "ok",
+      processes: [{ pid: 1, commandLine: "codex exec --json" }],
+    });
+  });
 
-    const result = mod.listRunningCodexProcesses({
+  test("deduplicates matching current-user writer processes", () => {
+    const result = listRunningCodexProcesses({
       platform: "linux",
       listSnapshots: () => [
         { pid: 10, commandLine: "codex exec" },
