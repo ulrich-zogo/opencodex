@@ -177,6 +177,22 @@ describe("Codex Log Guard inspection", () => {
     expect(report.capabilities.reclaim).toEqual({ state: "unsupported", reason: "database_missing" });
   });
 
+  test("treats an existing empty canonical database as unreadable, not missing", () => {
+    const root = makeRoot();
+    const codexHome = join(root, "codex-home");
+    mkdirSync(codexHome);
+    writeFileSync(join(codexHome, "config.toml"), "");
+    writeFileSync(join(codexHome, "logs_2.sqlite"), "");
+
+    const report = inspectCodexLogs({ codexHome });
+
+    expect(report.schema).toEqual({ state: "unreadable", reason: "database_unreadable" });
+    expect(report.files.databaseBytes).toBe(0);
+    expect(report.capabilities.inspection).toEqual({ state: "supported" });
+    expect(report.capabilities.protection).toEqual({ state: "unsupported", reason: "database_unreadable" });
+    expect(report.capabilities.reclaim).toEqual({ state: "unsupported", reason: "database_unreadable" });
+  });
+
   test("degrades unreadable databases to inspectable metadata instead of throwing", () => {
     const root = makeRoot();
     const codexHome = join(root, "codex-home");
