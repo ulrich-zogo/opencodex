@@ -111,12 +111,15 @@ describe("Codex Log Guard protection", () => {
     expect(deps.desired()).toBe("compat");
 
     insert(databasePath, "TRACE", "codex_api::sse");
+    insert(databasePath, "TRACE", "opentelemetry_sdk");
+    insert(databasePath, "TRACE", "opentelemetry_sdk::trace");
     insert(databasePath, "TRACE", "custom::trace");
     insert(databasePath, "DEBUG", "rmcp");
     insert(databasePath, "WARN", "hyper_util");
     insert(databasePath, "INFO", "codex_core");
 
     expect(rows(databasePath)).toEqual([
+      { level: "TRACE", target: "opentelemetry_sdk::trace" },
       { level: "TRACE", target: "custom::trace" },
       { level: "WARN", target: "hyper_util" },
       { level: "INFO", target: "codex_core" },
