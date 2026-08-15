@@ -59,7 +59,7 @@ WHEN
     'codex_tui::streaming::controller',
     'codex_tui::streaming::table_holdback'
   ) AND upper(NEW.level) = 'TRACE')
-  OR (NEW.target LIKE 'opentelemetry_sdk%' AND upper(NEW.level) IN ('TRACE', 'DEBUG'))
+  OR (NEW.target = 'opentelemetry_sdk' AND upper(NEW.level) IN ('TRACE', 'DEBUG'))
 BEGIN
   SELECT RAISE(IGNORE);
 END`;
