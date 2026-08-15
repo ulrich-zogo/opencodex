@@ -77,4 +77,34 @@ describe("Codex Log Guard management API", () => {
     expect(body.externalSqliteHome).toBe(true);
     expect(JSON.stringify(body)).not.toContain("PRIVATE API BODY");
   });
+
+  test("GET /api/storage carries the same diagnostics without folding external SQLite into CODEX_HOME totals", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-log-guard-storage-"));
+    roots.push(root);
+    const codexHome = join(root, "codex-home");
+    const sqliteHome = join(root, "sqlite-home");
+    mkdirSync(codexHome);
+    mkdirSync(sqliteHome);
+    writeFileSync(join(codexHome, "config.toml"), `sqlite_home = ${JSON.stringify(sqliteHome)}\n`);
+    makeLogsDb(join(sqliteHome, "logs_2.sqlite"));
+    process.env.CODEX_HOME = codexHome;
+
+    const req = new ManagementRequest("http://localhost/api/storage", { method: "GET" });
+    const response = await handleManagementAPI(req, new URL(req.url), config(), { refreshCodexCatalog: async () => {} });
+
+    expect(response).not.toBeNull();
+    expect(response!.status).toBe(200);
+    const body = await response!.json() as {
+      total: { bytes: number };
+      codexLogs?: {
+        databasePath: string;
+        externalSqliteHome: boolean;
+        files: { databaseBytes: number };
+      };
+    };
+    expect(body.codexLogs?.databasePath).toBe(join(sqliteHome, "logs_2.sqlite"));
+    expect(body.codexLogs?.externalSqliteHome).toBe(true);
+    expect(body.codexLogs!.files.databaseBytes).toBeGreaterThan(body.total.bytes);
+    expect(JSON.stringify(body)).not.toContain("PRIVATE API BODY");
+  });
 });
