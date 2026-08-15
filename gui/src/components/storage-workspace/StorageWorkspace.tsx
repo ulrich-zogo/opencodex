@@ -342,12 +342,13 @@ export default function StorageWorkspace({
           } : {}),
         };
         const response = await fetch(`${API_BASE}/api/storage/codex-logs/${suffix}`, init);
-        const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
         if (!response.ok) {
-          setLogGuardError({ generation, message: mutationErrorLabel(locale, payload.error) });
+          const errorPayload = await response.json().catch(() => ({})) as Record<string, unknown>;
+          setLogGuardError({ generation, message: mutationErrorLabel(locale, errorPayload.error) });
           return;
         }
-        setLogGuardOverride({ generation, report: payload as unknown as CodexLogGuardReport });
+        const payload = await response.json() as CodexLogGuardReport;
+        setLogGuardOverride({ generation, report: payload });
       } catch {
         setLogGuardError({ generation, message: logGuardLabel(locale, "error.generic") });
       } finally {
