@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { formatCodexLogGuardDoctor } from "../src/cli/codex-log-guard-doctor";
+import { formatCodexLogGuardDoctor, printCodexLogGuardDoctor } from "../src/cli/codex-log-guard-doctor";
 import type { CodexLogGuardInspection } from "../src/codex/log-guard/inspect";
 
 function report(overrides: Partial<CodexLogGuardInspection> = {}): CodexLogGuardInspection {
@@ -76,5 +76,22 @@ describe("Codex Log Guard doctor output", () => {
     }));
 
     expect(lines.join("\n")).toContain("logs_2.sqlite is not present");
+  });
+
+  test("printer obtains the report through an injectable read-only inspector", () => {
+    let inspections = 0;
+    const lines: string[] = [];
+
+    printCodexLogGuardDoctor({
+      inspect: () => {
+        inspections += 1;
+        return report();
+      },
+      log: line => lines.push(line),
+    });
+
+    expect(inspections).toBe(1);
+    expect(lines[0]).toBe("Codex diagnostic logs");
+    expect(lines.join("\n")).toContain("TRACE 50.0%");
   });
 });
