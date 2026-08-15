@@ -15,7 +15,9 @@ describe("Codex Log Guard process gate", () => {
     expect(mod.isCodexWriterCommandLine("codex --model gpt-5 app-server")).toBe(true);
     expect(mod.isCodexWriterCommandLine("/opt/codex-x86_64-unknown-linux-musl exec")).toBe(true);
     expect(mod.isCodexWriterCommandLine("codex-code-mode-host")).toBe(true);
+    expect(mod.isCodexWriterCommandLine("node /opt/codex-code-mode-host")).toBe(true);
     expect(mod.isCodexWriterCommandLine("node worker.js codex exec")).toBe(false);
+    expect(mod.isCodexWriterCommandLine("node worker.js codex-code-mode-host")).toBe(false);
     expect(mod.isCodexWriterCommandLine("bun /repo/opencodex/src/cli/index.ts storage codex-logs protect")).toBe(false);
     expect(mod.isCodexWriterCommandLine("hermes-codex-bridge-mcp")).toBe(false);
   });
