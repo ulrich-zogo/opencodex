@@ -4,6 +4,8 @@ import { scanStorage } from "../../storage/scanner";
 import { jsonResponse } from "../auth-cors";
 import type { ManagementContext } from "./context";
 
+const INSPECTION_FAILED_MESSAGE = "Codex log inspection failed";
+
 /** Read-only Codex Log Guard management surface. Mutation endpoints arrive in PR 2/3. */
 export async function handleStorageLogGuardRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config } = ctx;
@@ -12,10 +14,10 @@ export async function handleStorageLogGuardRoutes(ctx: ManagementContext): Promi
   if (url.pathname === "/api/storage/codex-logs") {
     try {
       return jsonResponse(inspectCodexLogs(), 200, req, config);
-    } catch (error) {
+    } catch {
       return jsonResponse({
         error: "inspect_failed",
-        message: error instanceof Error ? error.message : String(error),
+        message: INSPECTION_FAILED_MESSAGE,
       }, 500, req, config);
     }
   }
