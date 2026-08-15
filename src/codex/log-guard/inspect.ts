@@ -209,6 +209,24 @@ export function inspectCodexLogs(deps: CodexSqliteHomeDeps = {}): CodexLogGuardI
     };
   }
 
+  // SQLite accepts a zero-byte file as an empty database. For Log Guard this is not a
+  // compatible future schema: Codex's canonical logs database must already contain its
+  // migrated `logs` table before any future mutation capability can be considered safe.
+  if (files.databaseBytes === 0) {
+    const schema: CodexLogGuardSchemaState = { state: "unreadable", reason: "database_unreadable" };
+    const mutation = capabilityFor(schema);
+    return {
+      ...common,
+      schema,
+      metrics: null,
+      capabilities: {
+        inspection: { state: "supported" },
+        protection: mutation,
+        reclaim: mutation,
+      },
+    };
+  }
+
   try {
     const uri = `${pathToFileURL(databasePath).href}?immutable=1`;
     const db = new Database(uri, IMMUTABLE_READONLY_FLAGS);
