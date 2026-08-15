@@ -94,4 +94,17 @@ describe("Codex Log Guard doctor output", () => {
     expect(lines[0]).toBe("Codex diagnostic logs");
     expect(lines.join("\n")).toContain("TRACE 50.0%");
   });
+
+  test("printer redacts path-bearing inspection failures", () => {
+    const lines: string[] = [];
+    printCodexLogGuardDoctor({
+      inspect: () => { throw new Error("failed at /private/state/logs_2.sqlite"); },
+      log: line => lines.push(line),
+    });
+
+    const text = lines.join("\n");
+    expect(text).toContain("inspection unavailable");
+    expect(text).not.toContain("/private/state");
+    expect(text).not.toContain("failed at");
+  });
 });
