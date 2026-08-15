@@ -97,76 +97,65 @@ function rowsDisplay(bucket: StorageBucket, locale: Locale, t: TFn): string {
   return bucket.rows.toLocaleString(locale);
 }
 
-function formatLogBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KiB`;
-  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MiB`;
-  return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
-}
-
-function logSchemaLabel(schema: LogGuardSchema): string {
-  if (schema.state === "compatible") return "Compatible";
-  if (schema.state === "unsupported") return "Unknown schema";
-  if (schema.state === "unreadable") return "Unreadable";
-  return "Not present";
-}
-
-function CodexLogGuardPanel({ report, locale }: { report: CodexLogGuardReport; locale: Locale }) {
+function CodexLogGuardPanel({ report, locale, t }: { report: CodexLogGuardReport; locale: Locale; t: TFn }) {
   const metrics = report.metrics;
   const inspectOnly = report.capabilities.protection.state === "unsupported"
     || report.capabilities.reclaim.state === "unsupported";
 
   return (
     <div className="stw-section" data-testid="codex-log-guard">
-      <h3 className="stw-section-title">Codex diagnostic logs</h3>
+      <h3 className="stw-section-title">{t("storage.bucket.logs_db")}</h3>
       <dl className="stw-kv">
         <div className="stw-kv-row">
-          <dt>Status</dt>
-          <dd>{logSchemaLabel(report.schema)}{inspectOnly && report.schema.state === "unsupported" ? " · Inspection only" : ""}</dd>
+          <dt>{t("dash.status")}</dt>
+          <dd className="stw-kv-mono">
+            <code>{report.schema.state}</code>
+            {inspectOnly && report.schema.state === "unsupported" ? <><span aria-hidden="true"> · </span><code>inspection-only</code></> : null}
+          </dd>
         </div>
         <div className="stw-kv-row">
-          <dt>Database</dt>
-          <dd className="stw-kv-mono">{formatLogBytes(report.files.databaseBytes)}</dd>
+          <dt>{t("storage.bucket.logs_db")}</dt>
+          <dd className="stw-kv-mono">{formatBytes(report.files.databaseBytes, locale)}</dd>
         </div>
         <div className="stw-kv-row">
-          <dt>WAL</dt>
-          <dd className="stw-kv-mono">{formatLogBytes(report.files.walBytes)}</dd>
+          <dt><code>WAL</code></dt>
+          <dd className="stw-kv-mono">{formatBytes(report.files.walBytes, locale)}</dd>
         </div>
         {metrics && (
           <>
             <div className="stw-kv-row">
-              <dt>Rows</dt>
+              <dt>{t("storage.col.rows")}</dt>
               <dd className="stw-kv-mono">{metrics.totalRows.toLocaleString(locale)}</dd>
             </div>
             <div className="stw-kv-row">
-              <dt>TRACE share</dt>
+              <dt><code>TRACE</code></dt>
               <dd className="stw-kv-mono">{(metrics.traceShare * 100).toFixed(1)}%</dd>
             </div>
             <div className="stw-kv-row">
-              <dt>Reclaimable</dt>
-              <dd className="stw-kv-mono">{formatLogBytes(metrics.reclaimableBytes)}</dd>
+              <dt><code>freelist</code></dt>
+              <dd className="stw-kv-mono">{formatBytes(metrics.reclaimableBytes, locale)}</dd>
             </div>
           </>
         )}
         <div className="stw-kv-row">
-          <dt>SQLite home</dt>
+          <dt><code>sqlite_home</code></dt>
           <dd className="stw-kv-mono" title={report.sqliteHome}>
-            {report.externalSqliteHome ? "external sqlite_home" : "CODEX_HOME"}
+            <code>{report.externalSqliteHome ? "external sqlite_home" : "CODEX_HOME"}</code>
           </dd>
         </div>
       </dl>
       {metrics && metrics.topTargets.length > 0 && (
         <div className="stw-section">
-          <h4 className="stw-section-title">Top log targets</h4>
+          <h4 className="stw-section-title"><code>target</code></h4>
           {metrics.topTargets.slice(0, 5).map(target => (
             <div key={target.target} className="stw-file-row">
-              <span className="stw-file-path" title={target.target}>{target.target}</span>
-              <span className="stw-file-size">{target.rows.toLocaleString(locale)} rows</span>
+              <span className="stw-file-path" title={target.target}><code>{target.target}</code></span>
+              <span className="stw-file-size">{target.rows.toLocaleString(locale)}</span>
             </div>
           ))}
         </div>
       )}
-      <p className="stw-hint">Read-only checkpointed snapshot. Live WAL contents can be newer than the row aggregates shown here.</p>
+      <p className="stw-hint"><code>immutable=1 · snapshot={report.snapshot}</code></p>
     </div>
   );
 }
@@ -295,7 +284,7 @@ export default function StorageWorkspace({ report, locale }: StorageWorkspacePro
               </div>
             </div>
 
-            {report.codexLogs && <CodexLogGuardPanel report={report.codexLogs} locale={locale} />}
+            {report.codexLogs && <CodexLogGuardPanel report={report.codexLogs} locale={locale} t={t} />}
 
             {largestAcross.length > 0 ? (
               <div className="stw-section">
