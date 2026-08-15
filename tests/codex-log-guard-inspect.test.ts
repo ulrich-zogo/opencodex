@@ -92,9 +92,10 @@ describe("Codex Log Guard inspection", () => {
 
     const report = inspectCodexLogs({ codexHome });
 
-    expect(report.sqliteHome).toBe(sqliteHome);
-    expect(report.databasePath).toBe(join(sqliteHome, "logs_2.sqlite"));
     expect(report.externalSqliteHome).toBe(true);
+    expect(report).not.toHaveProperty("sqliteHome");
+    expect(report).not.toHaveProperty("databasePath");
+    expect(report).not.toHaveProperty("codexHome");
     expect(report.schema.state).toBe("compatible");
     expect(report.capabilities).toEqual({
       inspection: { state: "supported" },
@@ -122,6 +123,7 @@ describe("Codex Log Guard inspection", () => {
     expect(serialized).not.toContain("PRIVATE prompt beta");
     expect(serialized).not.toContain("PRIVATE info body");
     expect(serialized).not.toContain("feedback_log_body");
+    expect(serialized).not.toContain(codexHome);
   });
 
   test("performs zero filesystem writes and does not create WAL/SHM sidecars", () => {
@@ -169,7 +171,6 @@ describe("Codex Log Guard inspection", () => {
 
     const report = inspectCodexLogs({ codexHome });
 
-    expect(report.databasePath).toBe(join(codexHome, "logs_2.sqlite"));
     expect(report.schema).toEqual({ state: "missing", reason: "database_missing" });
     expect(report.metrics).toBeNull();
     expect(report.files).toEqual({ databaseBytes: 0, walBytes: 0, shmBytes: 0 });
