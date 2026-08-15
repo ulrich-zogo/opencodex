@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { formatCodexLogGuardDoctor } from "../src/cli/codex-log-guard-doctor";
+import { formatCodexLogGuardDoctor, printCodexLogGuardDoctor } from "../src/cli/codex-log-guard-doctor";
 import type { CodexLogGuardStatus } from "../src/codex/log-guard/protection";
 
 function status(state: CodexLogGuardStatus["protection"]): CodexLogGuardStatus {
@@ -51,5 +51,14 @@ describe("Codex Log Guard doctor protection output", () => {
       state: "off",
     })).join("\n");
     expect(text).toContain("protection off");
+  });
+
+  test("an injected inspector failure never falls through to the real Codex home", () => {
+    const lines: string[] = [];
+    printCodexLogGuardDoctor({
+      inspect: () => { throw new Error("synthetic-inspector-failure"); },
+      log: line => lines.push(line),
+    });
+    expect(lines.join("\n")).toContain("synthetic-inspector-failure");
   });
 });
