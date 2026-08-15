@@ -1,7 +1,7 @@
 import { lstatSync, realpathSync } from "node:fs";
 import { Database, constants as sqliteConstants } from "bun:sqlite";
 
-import { getCodexHome, resolveCodexLogsDbPath } from "../paths";
+import { getCodexHome } from "../paths";
 import { samePathIdentity } from "../user-identity";
 import { inspectCodexLogs, type CodexLogGuardInspection } from "./inspect";
 import { withCodexLogGuardLock, type CodexLogGuardLockOutcome } from "./lock";
@@ -74,11 +74,6 @@ const SQL_BY_MODE: Record<Exclude<CodexLogGuardMode, "off">, string> = {
   quiet: QUIET_TRIGGER_SQL,
 };
 
-const NAME_BY_MODE: Record<Exclude<CodexLogGuardMode, "off">, string> = {
-  compat: COMPAT_TRIGGER,
-  quiet: QUIET_TRIGGER,
-};
-
 export type CodexLogGuardObservedMode = CodexLogGuardMode | "collision";
 export type CodexLogGuardProtectionState = "off" | "active" | "drifted" | "unsupported" | "unknown";
 
@@ -123,6 +118,10 @@ interface TriggerRow {
   sql: string | null;
 }
 interface ColumnRow { name: string }
+
+type LockedMutationResult =
+  | { ok: true }
+  | { ok: false; error: CodexLogGuardMutationError };
 
 function normalizeSql(sql: string | null | undefined): string {
   return (sql ?? "").trim().replace(/;\s*$/, "").replace(/\s+/g, " ");
@@ -311,12 +310,28 @@ function performMutation(
   if (firstRefusal) return { ok: false, error: firstRefusal };
 
   const withLock = deps.withLock ?? withCodexLogGuardLock;
-  let locked: CodexLogGuardLockOutcome<ReturnType<typeof mutateOwnedTrigger>>;
+  const writeDesired = deps.writeDesiredMode ?? writeCodexLogGuardMode;
+  let locked: CodexLogGuardLockOutcome<LockedMutationResult>;
   try {
     locked = withLock(codexHome, inspection.databasePath, () => {
+      // Recheck after acquiring L so a Codex process that starts during lock
+      // acquisition cannot race the foreign-schema mutation.
       const secondRefusal = processRefusal(checkProcesses());
-      if (secondRefusal) return { ok: false as const, error: secondRefusal };
-      return mutateOwnedTrigger(inspection.databasePath, requestedMode);
+      if (secondRefusal) return { ok: false, error: secondRefusal };
+
+      const mutation = mutateOwnedTrigger(inspection.databasePath, requestedMode);
+      if (!mutation.ok) return mutation;
+
+      // Desired state belongs to the same logical transition as the trigger.
+      // Keep L held through this write so another OpenCodex process cannot
+      // interleave a different mode between the DB commit and config commit.
+      try {
+        writeDesired(requestedMode);
+      } catch {
+        restoreOwnedTrigger(inspection.databasePath, mutation.previousMode);
+        return { ok: false, error: "config_write_failed" as const };
+      }
+      return { ok: true };
     });
   } catch {
     return { ok: false, error: "database_error" };
@@ -329,16 +344,7 @@ function performMutation(
         : locked.reason === "unsafe-path" ? "unsafe_path" : "database_error",
     };
   }
-  const mutation = locked.value;
-  if (!mutation.ok) return mutation;
-
-  const writeDesired = deps.writeDesiredMode ?? writeCodexLogGuardMode;
-  try {
-    writeDesired(requestedMode);
-  } catch {
-    restoreOwnedTrigger(inspection.databasePath, mutation.previousMode);
-    return { ok: false, error: "config_write_failed" };
-  }
+  if (!locked.value.ok) return locked.value;
 
   return { ok: true, status: getCodexLogGuardProtectionStatus(deps) };
 }
