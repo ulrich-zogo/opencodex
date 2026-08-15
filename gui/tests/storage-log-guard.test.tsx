@@ -42,20 +42,21 @@ function report(): StorageReport {
 test("Storage overview renders read-only Codex diagnostic log health", () => {
   const html = renderToStaticMarkup(
     <LanguageProvider>
-      <StorageWorkspace report={report()} locale="en-US" />
+      <StorageWorkspace report={report()} locale="en" />
     </LanguageProvider>,
   );
 
   expect(html).toContain('data-testid="codex-log-guard"');
-  expect(html).toContain("Codex diagnostic logs");
-  expect(html).toContain("Compatible");
+  expect(html).toContain("Logs database");
+  expect(html).toContain("compatible");
   expect(html).toContain("400");
   expect(html).toContain("50.0%");
-  expect(html).toContain("8.0 KiB");
-  expect(html).toContain("2.0 KiB");
-  expect(html).toContain("4.0 KiB");
+  expect(html).toContain("8 KB");
+  expect(html).toContain("2 KB");
+  expect(html).toContain("4 KB");
   expect(html).toContain("codex_api::sse");
   expect(html).toContain("external sqlite_home");
+  expect(html).toContain("snapshot=checkpointed");
   expect(html).not.toContain("Protect");
   expect(html).not.toContain("Compact");
   expect(html).not.toContain("High write activity");
@@ -75,10 +76,10 @@ test("Storage overview makes unknown schemas visibly inspect-only", () => {
 
   const html = renderToStaticMarkup(
     <LanguageProvider>
-      <StorageWorkspace report={value} locale="en-US" />
+      <StorageWorkspace report={value} locale="en" />
     </LanguageProvider>,
   );
 
-  expect(html).toContain("Unknown schema");
-  expect(html).toContain("Inspection only");
+  expect(html).toContain("unsupported");
+  expect(html).toContain("inspection-only");
 });
