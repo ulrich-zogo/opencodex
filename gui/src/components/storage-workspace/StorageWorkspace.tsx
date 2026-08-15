@@ -8,7 +8,7 @@
 import { useMemo, useState } from "react";
 import { IconChevron, IconHardDrive } from "../../icons";
 import { useT, type TFn, type TKey, type Locale } from "../../i18n/shared";
-import { logGuardLabel, type LogGuardLabelKey } from "../../i18n/log-guard-labels";
+import { logGuardLabel } from "../../i18n/log-guard-labels";
 import { formatBytes } from "../../format-bytes";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
@@ -97,17 +97,6 @@ const BUCKET_TKEYS: Record<string, TKey> = {
   other: "storage.bucket.other",
 };
 
-const MUTATION_ERROR_KEYS = new Set([
-  "codex_running",
-  "process_enumeration_failed",
-  "busy",
-  "unsupported_schema",
-  "trigger_collision",
-  "unsafe_path",
-  "database_error",
-  "config_write_failed",
-]);
-
 export function bucketLabel(bucket: StorageBucket, t: TFn): string {
   const tkey = BUCKET_TKEYS[bucket.key];
   return tkey ? t(tkey) : bucket.label;
@@ -124,10 +113,17 @@ function rowsDisplay(bucket: StorageBucket, locale: Locale, t: TFn): string {
 }
 
 function mutationErrorLabel(locale: Locale, code: unknown): string {
-  if (typeof code === "string" && MUTATION_ERROR_KEYS.has(code)) {
-    return logGuardLabel(locale, `error.${code}` as LogGuardLabelKey);
+  switch (code) {
+    case "codex_running": return logGuardLabel(locale, "error.codex_running");
+    case "process_enumeration_failed": return logGuardLabel(locale, "error.process_enumeration_failed");
+    case "busy": return logGuardLabel(locale, "error.busy");
+    case "unsupported_schema": return logGuardLabel(locale, "error.unsupported_schema");
+    case "trigger_collision": return logGuardLabel(locale, "error.trigger_collision");
+    case "unsafe_path": return logGuardLabel(locale, "error.unsafe_path");
+    case "database_error": return logGuardLabel(locale, "error.database_error");
+    case "config_write_failed": return logGuardLabel(locale, "error.config_write_failed");
+    default: return logGuardLabel(locale, "error.generic");
   }
-  return logGuardLabel(locale, "error.generic");
 }
 
 function CodexLogGuardPanel({
