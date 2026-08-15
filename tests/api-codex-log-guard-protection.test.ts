@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { CodexLogGuardMode, CodexLogGuardProtectionDeps } from "../src/codex/log-guard/protection";
 import { handleManagementAPI } from "../src/server/management-api";
 import type { OcxConfig } from "../src/types";
 import { ManagementRequest } from "./helpers/management-auth";
@@ -39,7 +40,7 @@ function createLogsDb(path: string): void {
   db.close();
 }
 
-function fixture(): { databasePath: string } {
+function fixture(): { databasePath: string; protectionDeps: CodexLogGuardProtectionDeps } {
   const root = mkdtempSync(join(tmpdir(), "ocx-log-guard-api-protect-"));
   roots.push(root);
   const codexHome = join(root, "codex-home");
@@ -56,20 +57,36 @@ function fixture(): { databasePath: string } {
   process.env.OPENCODEX_HOME = ocxHome;
   const databasePath = join(codexHome, "logs_2.sqlite");
   createLogsDb(databasePath);
-  return { databasePath };
+
+  let desiredMode: CodexLogGuardMode = "off";
+  const protectionDeps: CodexLogGuardProtectionDeps = {
+    codexHome,
+    processCheck: () => ({ state: "ok", processes: [] }),
+    readDesiredMode: () => desiredMode,
+    writeDesiredMode: mode => { desiredMode = mode; },
+    withLock: <T>(_home: string, _database: string, work: () => T) => ({
+      kind: "completed",
+      value: work(),
+    }),
+  };
+  return { databasePath, protectionDeps };
 }
 
 function config(): OcxConfig {
   return { port: 0, defaultProvider: "openai", providers: {} } as OcxConfig;
 }
 
-async function request(path: string, init: RequestInit): Promise<Response> {
+async function request(
+  path: string,
+  init: RequestInit,
+  protectionDeps: CodexLogGuardProtectionDeps,
+): Promise<Response> {
   const req = new ManagementRequest(`http://localhost${path}`, init);
   const response = await handleManagementAPI(
     req,
     new URL(req.url),
     config(),
-    { refreshCodexCatalog: async () => {} },
+    { codexLogGuardProtectionDeps: protectionDeps },
   );
   expect(response).not.toBeNull();
   return response!;
@@ -85,13 +102,13 @@ afterEach(() => {
 
 describe("Codex Log Guard protection management API", () => {
   test("protect, drift repair, and unprotect round-trip desired and observed state", async () => {
-    const { databasePath } = fixture();
+    const { databasePath, protectionDeps } = fixture();
 
     const protect = await request("/api/storage/codex-logs/protect", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ mode: "compat" }),
-    });
+    }, protectionDeps);
     expect(protect.status).toBe(200);
     expect((await protect.json()).protection).toEqual({
       desiredMode: "compat",
@@ -120,7 +137,7 @@ describe("Codex Log Guard protection management API", () => {
     `);
     db.close();
 
-    const drift = await request("/api/storage/codex-logs", { method: "GET" });
+    const drift = await request("/api/storage/codex-logs", { method: "GET" }, protectionDeps);
     expect(drift.status).toBe(200);
     expect((await drift.json()).protection).toEqual({
       desiredMode: "compat",
@@ -128,11 +145,19 @@ describe("Codex Log Guard protection management API", () => {
       state: "drifted",
     });
 
-    const repair = await request("/api/storage/codex-logs/repair", { method: "POST" });
+    const repair = await request(
+      "/api/storage/codex-logs/repair",
+      { method: "POST" },
+      protectionDeps,
+    );
     expect(repair.status).toBe(200);
     expect((await repair.json()).protection.state).toBe("active");
 
-    const unprotect = await request("/api/storage/codex-logs/unprotect", { method: "POST" });
+    const unprotect = await request(
+      "/api/storage/codex-logs/unprotect",
+      { method: "POST" },
+      protectionDeps,
+    );
     expect(unprotect.status).toBe(200);
     expect((await unprotect.json()).protection).toEqual({
       desiredMode: "off",
@@ -142,12 +167,12 @@ describe("Codex Log Guard protection management API", () => {
   });
 
   test("protect validates its mode before touching the database", async () => {
-    fixture();
+    const { protectionDeps } = fixture();
     const response = await request("/api/storage/codex-logs/protect", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ mode: "maximum" }),
-    });
+    }, protectionDeps);
     expect(response.status).toBe(400);
   });
 });
