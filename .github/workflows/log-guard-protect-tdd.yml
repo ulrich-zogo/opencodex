@@ -27,6 +27,8 @@ jobs:
             tests/codex-log-guard-protection.test.ts \
             tests/codex-log-guard-processes.test.ts \
             tests/codex-log-guard-lock.test.ts \
+            tests/codex-log-guard-policy.test.ts \
+            tests/codex-log-guard-status-zero-write.test.ts \
             tests/api-codex-log-guard-protection.test.ts \
             tests/cli-codex-log-guard-protection.test.ts \
             tests/codex-log-guard-doctor-protection.test.ts
