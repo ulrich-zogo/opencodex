@@ -6,9 +6,6 @@ import type { CodexLogGuardInspection } from "../src/codex/log-guard/inspect";
 function report(overrides: Partial<CodexLogGuardInspection> = {}): CodexLogGuardInspection {
   return {
     generatedAt: 1,
-    codexHome: "/home/user/.codex",
-    sqliteHome: "/state/codex",
-    databasePath: "/state/codex/logs_2.sqlite",
     externalSqliteHome: true,
     snapshot: "checkpointed",
     files: { databaseBytes: 10 * 1024, walBytes: 2 * 1024, shmBytes: 0 },
