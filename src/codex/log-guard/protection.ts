@@ -1,4 +1,5 @@
 import { lstatSync, realpathSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import { Database, constants as sqliteConstants } from "bun:sqlite";
 
 import { getCodexHome } from "../paths";
@@ -17,6 +18,7 @@ import {
 
 export { type CodexLogGuardMode } from "./policy";
 
+const IMMUTABLE_READONLY_FLAGS = sqliteConstants.SQLITE_OPEN_READONLY | sqliteConstants.SQLITE_OPEN_URI;
 const COMPAT_TRIGGER = "opencodex_log_guard_compat_v1";
 const QUIET_TRIGGER = "opencodex_log_guard_quiet_v1";
 const OWNED_TRIGGER_NAMES = [COMPAT_TRIGGER, QUIET_TRIGGER] as const;
@@ -159,8 +161,14 @@ function exactCurrentSchema(db: Database): boolean {
   return columns.length === expected.length && columns.every((value, index) => value === expected[index]);
 }
 
+/**
+ * Read trigger metadata with the same immutable/checkpointed semantics as PR 1
+ * diagnostics. A status GET must never participate in Codex's SQLite WAL/SHM
+ * protocol or materialise sidecars merely to report protection state.
+ */
 function openReadOnly(databasePath: string): Database {
-  return new Database(databasePath, sqliteConstants.SQLITE_OPEN_READONLY);
+  const uri = `${pathToFileURL(databasePath).href}?immutable=1`;
+  return new Database(uri, IMMUTABLE_READONLY_FLAGS);
 }
 
 function openReadWrite(databasePath: string): Database {
@@ -221,6 +229,26 @@ export function getCodexLogGuardProtectionStatus(
   return {
     ...inspection,
     protection: protectionSummary(inspection, desiredMode, observedMode),
+  };
+}
+
+function successfulMutationStatus(
+  codexHome: string,
+  mode: CodexLogGuardMode,
+): CodexLogGuardStatus {
+  // The trigger was read back and verified inside the write transaction before
+  // this is called, and desired state was persisted while L was still held.
+  // Use that verified state for the immediate mutation response; an immutable
+  // status read can legitimately lag WAL-resident schema changes until Codex
+  // checkpoints them.
+  const inspection = inspectCodexLogs({ codexHome });
+  return {
+    ...inspection,
+    protection: {
+      desiredMode: mode,
+      observedMode: mode,
+      state: mode === "off" ? "off" : "active",
+    },
   };
 }
 
@@ -346,7 +374,7 @@ function performMutation(
   }
   if (!locked.value.ok) return locked.value;
 
-  return { ok: true, status: getCodexLogGuardProtectionStatus(deps) };
+  return { ok: true, status: successfulMutationStatus(codexHome, requestedMode) };
 }
 
 export function protectCodexLogs(
