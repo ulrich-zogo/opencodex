@@ -73,12 +73,16 @@ describe("Codex Log Guard management API", () => {
     expect(response).not.toBeNull();
     expect(response!.status).toBe(200);
     const body = await response!.json() as Record<string, unknown>;
-    expect(body.databasePath).toBe(join(sqliteHome, "logs_2.sqlite"));
     expect(body.externalSqliteHome).toBe(true);
+    expect(body).not.toHaveProperty("sqliteHome");
+    expect(body).not.toHaveProperty("databasePath");
+    expect(body).not.toHaveProperty("codexHome");
+    expect(JSON.stringify(body)).not.toContain(sqliteHome);
+    expect(JSON.stringify(body)).not.toContain(codexHome);
     expect(JSON.stringify(body)).not.toContain("PRIVATE API BODY");
   });
 
-  test("GET /api/storage carries the same diagnostics without folding external SQLite into CODEX_HOME totals", async () => {
+  test("GET /api/storage carries path-safe diagnostics without folding external SQLite into CODEX_HOME totals", async () => {
     const root = mkdtempSync(join(tmpdir(), "ocx-log-guard-storage-"));
     roots.push(root);
     const codexHome = join(root, "codex-home");
@@ -97,14 +101,36 @@ describe("Codex Log Guard management API", () => {
     const body = await response!.json() as {
       total: { bytes: number };
       codexLogs?: {
-        databasePath: string;
         externalSqliteHome: boolean;
         files: { databaseBytes: number };
       };
     };
-    expect(body.codexLogs?.databasePath).toBe(join(sqliteHome, "logs_2.sqlite"));
     expect(body.codexLogs?.externalSqliteHome).toBe(true);
     expect(body.codexLogs!.files.databaseBytes).toBeGreaterThan(body.total.bytes);
-    expect(JSON.stringify(body)).not.toContain("PRIVATE API BODY");
+    expect(body.codexLogs).not.toHaveProperty("sqliteHome");
+    expect(body.codexLogs).not.toHaveProperty("databasePath");
+    expect(body.codexLogs).not.toHaveProperty("codexHome");
+    expect(JSON.stringify(body.codexLogs)).not.toContain(sqliteHome);
+    expect(JSON.stringify(body.codexLogs)).not.toContain(codexHome);
+    expect(JSON.stringify(body.codexLogs)).not.toContain("PRIVATE API BODY");
+  });
+
+  test("inspection failures return a stable message without leaking the config path", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-log-guard-api-error-"));
+    roots.push(root);
+    const codexHome = join(root, "private-codex-home");
+    mkdirSync(codexHome);
+    writeFileSync(join(codexHome, "config.toml"), "sqlite_home = 42\n");
+    process.env.CODEX_HOME = codexHome;
+
+    const req = new ManagementRequest("http://localhost/api/storage/codex-logs", { method: "GET" });
+    const response = await handleManagementAPI(req, new URL(req.url), config(), { refreshCodexCatalog: async () => {} });
+
+    expect(response).not.toBeNull();
+    expect(response!.status).toBe(500);
+    expect(await response!.json()).toEqual({
+      error: "inspect_failed",
+      message: "Codex log inspection failed",
+    });
   });
 });
