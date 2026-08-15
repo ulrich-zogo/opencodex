@@ -41,18 +41,29 @@ function isCodeModeHostExecutable(token: string): boolean {
   return base === "codex-code-mode-host" || base === "codex-code-mode-host.exe";
 }
 
+function isInterpreterExecutable(token: string): boolean {
+  const base = basename(token);
+  return base === "node" || base === "node.exe"
+    || base === "bun" || base === "bun.exe"
+    || base === "deno" || base === "deno.exe";
+}
+
 /**
- * Match only official Codex writer executables at argv0.
+ * Match official Codex writer executables at argv0 plus the repository's
+ * established interpreter-entrypoint form for code-mode-host.
  *
  * Every normal Codex invocation may emit persistent diagnostics, not just
- * app-server, so Protect must gate the whole executable family. Later argv
- * tokens deliberately do not count: `node worker.js codex exec` and paths that
- * merely contain "opencodex" are not Codex processes.
+ * app-server, so Protect must gate the whole executable family. Arbitrary later
+ * argv tokens deliberately do not count: `node worker.js codex exec` and paths
+ * that merely contain "opencodex" are not Codex processes.
  */
 export function isCodexWriterCommandLine(commandLine: string): boolean {
   const tokens = tokenizeCommandLine(commandLine.trim());
   if (tokens.length === 0) return false;
-  return isOfficialCodexExecutable(tokens[0]!) || isCodeModeHostExecutable(tokens[0]!);
+  if (isOfficialCodexExecutable(tokens[0]!) || isCodeModeHostExecutable(tokens[0]!)) return true;
+  return tokens.length > 1
+    && isInterpreterExecutable(tokens[0]!)
+    && isCodeModeHostExecutable(tokens[1]!);
 }
 
 function statusUid(status: string): number | undefined {
