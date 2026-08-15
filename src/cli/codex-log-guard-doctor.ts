@@ -1,4 +1,4 @@
-import type { CodexLogGuardInspection } from "../codex/log-guard/inspect";
+import { inspectCodexLogs, type CodexLogGuardInspection } from "../codex/log-guard/inspect";
 
 function kib(bytes: number): string {
   return `${(bytes / 1024).toFixed(1)} KiB`;
@@ -34,4 +34,21 @@ export function formatCodexLogGuardDoctor(report: CodexLogGuardInspection): stri
 
   lines.push("         checkpointed read-only snapshot; activity rate not measured");
   return lines;
+}
+
+export interface CodexLogGuardDoctorDeps {
+  inspect?: () => CodexLogGuardInspection;
+  log?: (line: string) => void;
+}
+
+/** Observe-only doctor section. Inspection failures are reported without mutating or failing doctor. */
+export function printCodexLogGuardDoctor(deps: CodexLogGuardDoctorDeps = {}): void {
+  const inspect = deps.inspect ?? inspectCodexLogs;
+  const log = deps.log ?? console.log;
+  try {
+    for (const line of formatCodexLogGuardDoctor(inspect())) log(line);
+  } catch (error) {
+    log("Codex diagnostic logs");
+    log(`  --     inspection unavailable: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
